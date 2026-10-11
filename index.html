@@ -187,7 +187,7 @@
       <!-- CLOUD SYNC SECTION -->
       <div class="section">
         <h2>Cloud Sync (JSONBin)</h2>
-        <div style="font-size:11px;color:#777;margin-bottom:8px">Sync customers seamlessly between Mac & iPad.</div>
+        <div style="font-size:11px;color:#777;margin-bottom:8px">Sync customers & invoice numbers between Mac & iPad.</div>
         <div class="grid2">
           <div>
             <label>Master API Key</label>
@@ -224,26 +224,29 @@
         </div>
 
         <label>Venue / Artist / Company</label>
-        <input id="recipient" value="JAZZ CAFE ALTO">
+        <input id="recipient" value="">
         <label>Customer Email</label>
-        <input id="customerEmail" type="email" placeholder="altojazzcafe@gmail.com" value="altojazzcafe@gmail.com">
+        <input id="customerEmail" type="email" placeholder="altojazzcafe@gmail.com" value="">
         <label>Attention / Hiring Person</label>
-        <input id="attention" value="Mr Ali">
+        <input id="attention" value="">
         <label>Street + House Number</label>
-        <input id="street" value="Korte Leidsedwarsstraat 115">
+        <input id="street" value="">
         <label>Postcode + City</label>
-        <input id="city" value="1017 PX Amsterdam">
+        <input id="city" value="">
 
         <div class="grid2">
           <div><label>Invoice Date</label><input id="invoiceDate" type="date"></div>
-          <div><label>Reference</label><input id="reference" value="90011"></div>
+          <div><label>Reference</label><input id="reference" value=""></div>
         </div>
         <div class="grid2">
           <div><label>Regards / Subject</label><input id="regards" value="Gig"></div>
-          <div><label>Invoice No.</label><input id="invoiceNo" value="20260010"></div>
+          <div>
+            <label>Invoice No.</label>
+            <input id="invoiceNo" value="20260010">
+          </div>
         </div>
-        <div style="font-size:11px;color:#777;margin-top:5px">Invoice numbers advance automatically when choosing “New invoice +1”.</div>
-        <label>Client No.</label><input id="clientNo" value="20230001">
+        <div style="font-size:11px;color:#777;margin-top:5px">Invoice numbers sync via cloud automatically.</div>
+        <label>Client No.</label><input id="clientNo" value="">
       </div>
 
       <div class="section">
@@ -391,7 +394,11 @@ async function pushToCloud(manual = false) {
     return;
   }
   
-  const data = getCustomers();
+  // We now package both customers AND the invoice counter into one payload
+  const payload = {
+    customers: getCustomers(),
+    invoiceCounter: localStorage.getItem(COUNTER_KEY) || $("invoiceNo").value
+  };
   
   try {
     const res = await fetch(`https://api.jsonbin.io/v3/b/${bin}`, {
@@ -400,13 +407,13 @@ async function pushToCloud(manual = false) {
         "Content-Type": "application/json",
         "X-Master-Key": key
       },
-      body: JSON.stringify(data)
+      body: JSON.stringify(payload)
     });
     if(!res.ok) {
       const errText = await res.text();
       throw new Error(`Server returned ${res.status}: ${errText}`);
     }
-    if(manual) alert("Success! Customers successfully pushed to the cloud.");
+    if(manual) alert("Success! Customers and Invoice Counter pushed to the cloud.");
   } catch(err) {
     console.error("Cloud Push Error:", err);
     if(manual) alert("Push failed: " + err.message);
@@ -434,13 +441,41 @@ async function pullFromCloud(manual = false) {
     const json = await res.json();
     const cloudData = json.record || json;
     
-    if(cloudData && typeof cloudData === 'object' && Object.keys(cloudData).length > 0) {
-      // OVERWRITE local storage completely with the cloud list so deletions sync properly
-      localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(cloudData));
-      populateCustomerDropdown();
-      
-      if(manual) alert("Success! Customers pulled from cloud (deletions and updates synchronized).");
+    // Check if bin is completely empty (freshly created)
+    if (Object.keys(cloudData).length === 0) {
+       pushToCloud(false); // Push initial local data to fill the new bin
+       if(manual) alert("Fresh Bin detected. Your local data has been pushed.");
+       return;
     }
+
+    let fetchedCustomers = {};
+    let fetchedCounter = null;
+
+    // Detect if this is the new data format (contains .customers and .invoiceCounter)
+    if (cloudData.customers !== undefined) {
+      fetchedCustomers = cloudData.customers;
+      fetchedCounter = cloudData.invoiceCounter;
+    } else {
+      // Backwards compatibility for your old cloud format
+      fetchedCustomers = cloudData;
+    }
+
+    if(fetchedCustomers && typeof fetchedCustomers === 'object') {
+      localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(fetchedCustomers));
+      populateCustomerDropdown();
+      onSelectCustomer(); // Refreshes fields if needed
+    }
+
+    // Sync Invoice Counter from cloud
+    if (fetchedCounter) {
+      localStorage.setItem(COUNTER_KEY, fetchedCounter);
+      $("invoiceNo").value = fetchedCounter;
+    }
+
+    render();
+
+    if(manual) alert("Success! Customers and Invoice Counter pulled from cloud.");
+    
   } catch(err) {
     console.error("Cloud Pull Error:", err);
     if(manual) alert("Pull failed: " + err.message);
@@ -663,8 +698,18 @@ function importCustomers(event){
         throw new Error("Invalid format");
       }
             
-      saveCustomers(importedData);
-      alert(`Successfully imported customers!`);
+      const currentCustomers = getCustomers();
+      let count = 0;
+
+      Object.keys(importedData).forEach(key => {
+        if(importedData[key] && importedData[key].recipient){
+          currentCustomers[key] = importedData[key];
+          count++;
+        }
+      });
+
+      saveCustomers(currentCustomers);
+      alert(`Successfully imported/merged ${count} customer(s)!`);
     } catch(err) {
       alert("Error importing file. Please ensure it is a valid customer JSON backup file.");
     }
@@ -692,10 +737,64 @@ function populateCustomerDropdown(){
   select.value = currentVal;
 }
 
+/* ---------- Intelligent Auto-Numbering ---------- */
+
+function invoiceNumberParts(value){
+  const str = String(value || "").trim();
+  const match = str.match(/^(.*?)(\d+)$/);
+  if(!match) return {prefix: str, number:0, width:0};
+  return {
+    prefix: match[1],
+    number: Number(match[2]),
+    width: match[2].length
+  };
+}
+
+// Scans all saved customers to find the highest Client Number, then adds +1
+function getNextClientNumber() {
+  const customers = getCustomers();
+  let maxNum = 0;
+  let prefix = "";
+  let width = 0;
+
+  for (let k in customers) {
+    const cNo = customers[k].clientNo;
+    if(cNo) {
+      const parts = invoiceNumberParts(cNo);
+      if (parts.number > maxNum) {
+        maxNum = parts.number;
+        prefix = parts.prefix;
+        width = parts.width;
+      }
+    }
+  }
+
+  // If no customers exist yet, try to read the current field or default it
+  if (maxNum === 0) {
+     const current = $("clientNo").value.trim();
+     if (current) return current;
+     return "20230001";
+  }
+
+  return prefix + String(maxNum + 1).padStart(width, "0");
+}
+
 function onSelectCustomer(){
   const select = $("customerSelect");
   const key = select.value;
-  if(!key) return;
+  if(!key) {
+    // If "-- New / Custom Customer --" is selected, clear fields and pre-fill next Client No.
+    $("recipient").value = "";
+    $("customerEmail").value = "";
+    $("attention").value = "";
+    $("street").value = "";
+    $("city").value = "";
+    $("clientNo").value = getNextClientNumber();
+    $("reference").value = "";
+    $("regards").value = "Gig";
+    render();
+    return;
+  }
 
   const customers = getCustomers();
   const c = customers[key];
@@ -710,19 +809,6 @@ function onSelectCustomer(){
     $("regards").value = c.regards || "Gig";
     render();
   }
-}
-
-/* ---------- Invoice Number Memory ---------- */
-
-function invoiceNumberParts(value){
-  const str = String(value || "").trim();
-  const match = str.match(/^(.*?)(\d+)$/);
-  if(!match) return {prefix:"", number:0, width:0};
-  return {
-    prefix: match[1],
-    number: Number(match[2]),
-    width: match[2].length
-  };
 }
 
 function setInitialInvoiceCounter(){
@@ -845,17 +931,17 @@ function render(){
 /* ---------- New Invoice ---------- */
 
 function newInvoice(){
-  rememberCurrentCustomer();
-
   const newNumber = nextInvoiceNumber();
-
-  rows = [{service:"Francisco Morales Quartet", date: getTodayString(), price: 90}];
-
   $("invoiceNo").value = newNumber;
   $("invoiceDate").value = getTodayString();
 
+  rows = [{service:"Francisco Morales Quartet", date: getTodayString(), price: 90}];
+  
   renderEditor();
   render();
+  
+  // Forces a cloud push to ensure the iPad gets the newly generated invoice number
+  pushToCloud(false);
 
   setTimeout(()=>{
     const first = document.querySelector("#editorRows input");
@@ -867,6 +953,12 @@ function newInvoice(){
 
 $("recipient").addEventListener("blur", () => {
   rememberCurrentCustomer();
+});
+
+// Update the cloud immediately if you manually edit the invoice number box
+$("invoiceNo").addEventListener("change", (e) => {
+  localStorage.setItem(COUNTER_KEY, e.target.value.trim());
+  pushToCloud(false);
 });
 
 ["customerEmail","attention","street","city","clientNo","reference","regards"]
@@ -895,6 +987,12 @@ if (Object.keys(getCustomers()).length === 0) {
 }
 
 populateCustomerDropdown();
+
+// If no specific customer is selected on startup, pre-fill the next smart Client Number
+if($("customerSelect").value === "") {
+  $("clientNo").value = getNextClientNumber();
+}
+
 renderEditor();
 render();
 
