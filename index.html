@@ -422,7 +422,7 @@ async function pullFromCloud(manual = false) {
   }
 
   try {
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${bin}/latest`, {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${bin}/latest?_t=${Date.now()}`, {
       headers: {
         "X-Master-Key": key
       }
@@ -432,18 +432,14 @@ async function pullFromCloud(manual = false) {
       throw new Error(`Server returned ${res.status}: ${errText}`);
     }
     const json = await res.json();
-    
-    // JSONBin v3 wraps data inside a "record" object
     const cloudData = json.record || json;
     
-    if(cloudData && typeof cloudData === 'object') {
-      const local = getCustomers();
-      const merged = { ...local, ...cloudData }; 
-      
-      localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(merged));
+    if(cloudData && typeof cloudData === 'object' && Object.keys(cloudData).length > 0) {
+      // OVERWRITE local storage completely with the cloud list so deletions sync properly
+      localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(cloudData));
       populateCustomerDropdown();
       
-      if(manual) alert("Success! Customers successfully pulled from cloud.");
+      if(manual) alert("Success! Customers pulled from cloud (deletions and updates synchronized).");
     }
   } catch(err) {
     console.error("Cloud Pull Error:", err);
@@ -598,7 +594,7 @@ function getCustomers(){
 function saveCustomers(customers){
   localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
   populateCustomerDropdown();
-  pushToCloud(false); // Silent push
+  pushToCloud(false);
 }
 
 function rememberCurrentCustomer(){
@@ -667,18 +663,8 @@ function importCustomers(event){
         throw new Error("Invalid format");
       }
             
-      const currentCustomers = getCustomers();
-      let count = 0;
-
-      Object.keys(importedData).forEach(key => {
-        if(importedData[key] && importedData[key].recipient){
-          currentCustomers[key] = importedData[key];
-          count++;
-        }
-      });
-
-      saveCustomers(currentCustomers);
-      alert(`Successfully imported/merged ${count} customer(s)!`);
+      saveCustomers(importedData);
+      alert(`Successfully imported customers!`);
     } catch(err) {
       alert("Error importing file. Please ensure it is a valid customer JSON backup file.");
     }
@@ -912,7 +898,6 @@ populateCustomerDropdown();
 renderEditor();
 render();
 
-// Only attempt initial cloud pull if keys are already filled out
 if($("cloudKey").value && $("cloudBin").value) {
   pullFromCloud(false);
 }
