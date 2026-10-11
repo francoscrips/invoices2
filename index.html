@@ -52,10 +52,21 @@
   .section:last-child{border-bottom:0;margin-bottom:0;padding-bottom:0}
   
   label{display:block;font-size:12px;font-weight:700;color:#665f58;margin:10px 0 4px}
+  
+  /* Inputs normalized to have exact same heights across iOS */
   input,textarea,select{
     width:100%;border:1px solid #cfc9c2;border-radius:8px;padding:10px 12px;
-    font:15px inherit;background:#fff;color:#333;
+    font-family:inherit;font-size:15px;background:#fff;color:#333;
+    min-height:44px; /* Apple UI recommended minimum height */
+    box-sizing:border-box;
+    -webkit-appearance: none; /* Removes native iOS styling weirdness */
+    appearance: none;
   }
+  input[type="date"] {
+    display:flex; /* Fixes alignment inside iOS date boxes */
+    align-items:center;
+  }
+  
   select{
     background-image: url("data:image/svg+xml;utf8,<svg fill='%2366594d' height='24' viewBox='0 0 24 24' width='24' xmlns='http://www.w3.org/2000/svg'><path d='7 10l5 5 5-5z'/></svg>");
     background-repeat: no-repeat;
@@ -67,12 +78,13 @@
   .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
 
+  /* Grid layout adjusted for iPad: Price is now narrower (70px instead of 100px) */
   .rows-head,.row{
-    display:grid;grid-template-columns:1fr 105px 100px 36px;gap:6px;align-items:center
+    display:grid;grid-template-columns:1fr 120px 70px 36px;gap:6px;align-items:center
   }
   .rows-head{font-size:11px;font-weight:800;color:#777;margin-bottom:6px}
   .row{margin-bottom:8px}
-  .row input{padding:8px;font-size:13px}
+  .row input{padding:8px;font-size:13px;min-width:0;}
   .price-input{
     font-size:14px !important;
     font-weight:700;
@@ -176,9 +188,9 @@
 <div class="app">
   <div class="toolbar no-print">
     <h1>Francisco Morales</h1>
-    <button id="mailBtn" onclick="mailInvoice()">Mail Invoice</button>
-    <button id="savePdfBtn" class="secondary" onclick="savePdf()">Save PDF</button>
-    <button class="secondary" onclick="newInvoice()">New invoice +1</button>
+    <button type="button" id="mailBtn" onclick="mailInvoice()">Mail Invoice</button>
+    <button type="button" id="savePdfBtn" class="secondary" onclick="savePdf()">Save PDF</button>
+    <button type="button" class="secondary" onclick="newInvoice()">New invoice +1</button>
   </div>
 
   <div class="layout">
@@ -253,7 +265,7 @@
         <h2>Performance Lines</h2>
         <div class="rows-head"><span>Service</span><span>Date</span><span style="text-align:right">Price €</span><span></span></div>
         <div id="editorRows"></div>
-        <button class="secondary addrow" onclick="addRow()">+ Add performance / date</button>
+        <button type="button" class="secondary addrow" onclick="addRow()">+ Add performance / date</button>
       </div>
 
       <div class="section">
@@ -394,7 +406,6 @@ async function pushToCloud(manual = false) {
     return;
   }
   
-  // We now package both customers AND the invoice counter into one payload
   const payload = {
     customers: getCustomers(),
     invoiceCounter: localStorage.getItem(COUNTER_KEY) || $("invoiceNo").value
@@ -441,9 +452,8 @@ async function pullFromCloud(manual = false) {
     const json = await res.json();
     const cloudData = json.record || json;
     
-    // Check if bin is completely empty (freshly created)
     if (Object.keys(cloudData).length === 0) {
-       pushToCloud(false); // Push initial local data to fill the new bin
+       pushToCloud(false);
        if(manual) alert("Fresh Bin detected. Your local data has been pushed.");
        return;
     }
@@ -451,29 +461,25 @@ async function pullFromCloud(manual = false) {
     let fetchedCustomers = {};
     let fetchedCounter = null;
 
-    // Detect if this is the new data format (contains .customers and .invoiceCounter)
     if (cloudData.customers !== undefined) {
       fetchedCustomers = cloudData.customers;
       fetchedCounter = cloudData.invoiceCounter;
     } else {
-      // Backwards compatibility for your old cloud format
       fetchedCustomers = cloudData;
     }
 
     if(fetchedCustomers && typeof fetchedCustomers === 'object') {
       localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(fetchedCustomers));
       populateCustomerDropdown();
-      onSelectCustomer(); // Refreshes fields if needed
+      onSelectCustomer(); 
     }
 
-    // Sync Invoice Counter from cloud
     if (fetchedCounter) {
       localStorage.setItem(COUNTER_KEY, fetchedCounter);
       $("invoiceNo").value = fetchedCounter;
     }
 
     render();
-
     if(manual) alert("Success! Customers and Invoice Counter pulled from cloud.");
     
   } catch(err) {
@@ -750,7 +756,6 @@ function invoiceNumberParts(value){
   };
 }
 
-// Scans all saved customers to find the highest Client Number, then adds +1
 function getNextClientNumber() {
   const customers = getCustomers();
   let maxNum = 0;
@@ -769,7 +774,6 @@ function getNextClientNumber() {
     }
   }
 
-  // If no customers exist yet, try to read the current field or default it
   if (maxNum === 0) {
      const current = $("clientNo").value.trim();
      if (current) return current;
@@ -783,7 +787,6 @@ function onSelectCustomer(){
   const select = $("customerSelect");
   const key = select.value;
   if(!key) {
-    // If "-- New / Custom Customer --" is selected, clear fields and pre-fill next Client No.
     $("recipient").value = "";
     $("customerEmail").value = "";
     $("attention").value = "";
@@ -857,7 +860,7 @@ function renderEditor(){
         onchange="rows[${i}].date=this.value;render()">
       <input type="number" class="price-input" min="0" step="0.01" value="${currentPrice}"
         oninput="updateRowPrice(${i}, this.value)">
-      <button class="danger remove"
+      <button type="button" class="danger remove"
         onclick="rows.splice(${i},1);renderEditor();render()">×</button>`;
     box.appendChild(el);
   });
@@ -931,22 +934,22 @@ function render(){
 /* ---------- New Invoice ---------- */
 
 function newInvoice(){
-  const newNumber = nextInvoiceNumber();
-  $("invoiceNo").value = newNumber;
-  $("invoiceDate").value = getTodayString();
+  try {
+    rememberCurrentCustomer(); // Ensures we don't lose typed text
 
-  rows = [{service:"Francisco Morales Quartet", date: getTodayString(), price: 90}];
-  
-  renderEditor();
-  render();
-  
-  // Forces a cloud push to ensure the iPad gets the newly generated invoice number
-  pushToCloud(false);
+    const newNumber = nextInvoiceNumber();
+    $("invoiceNo").value = newNumber;
+    $("invoiceDate").value = getTodayString();
 
-  setTimeout(()=>{
-    const first = document.querySelector("#editorRows input");
-    if(first) first.focus();
-  },50);
+    rows = [{service:"Francisco Morales Quartet", date: getTodayString(), price: 90}];
+    
+    renderEditor();
+    render();
+    
+    pushToCloud(false);
+  } catch(e) {
+    console.error(e);
+  }
 }
 
 /* ---------- Event Listeners ---------- */
@@ -955,7 +958,6 @@ $("recipient").addEventListener("blur", () => {
   rememberCurrentCustomer();
 });
 
-// Update the cloud immediately if you manually edit the invoice number box
 $("invoiceNo").addEventListener("change", (e) => {
   localStorage.setItem(COUNTER_KEY, e.target.value.trim());
   pushToCloud(false);
@@ -988,7 +990,6 @@ if (Object.keys(getCustomers()).length === 0) {
 
 populateCustomerDropdown();
 
-// If no specific customer is selected on startup, pre-fill the next smart Client Number
 if($("customerSelect").value === "") {
   $("clientNo").value = getNextClientNumber();
 }
