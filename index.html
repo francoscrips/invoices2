@@ -1,4 +1,3 @@
-
 <!doctype html>
 <html lang="en">
 <head>
@@ -187,16 +186,16 @@
       
       <!-- CLOUD SYNC SECTION -->
       <div class="section">
-        <h2>Cloud Sync (Auto-Sync)</h2>
-        <div style="font-size:11px;color:#777;margin-bottom:8px">Sync customers seamlessly between Mac & iPad via JSONBin.io.</div>
+        <h2>Cloud Sync (JSONBin)</h2>
+        <div style="font-size:11px;color:#777;margin-bottom:8px">Sync customers seamlessly between Mac & iPad.</div>
         <div class="grid2">
           <div>
-            <label>API Key (Master)</label>
-            <input id="cloudKey" type="password" placeholder="e.g. $2b$10$...">
+            <label>Master API Key</label>
+            <input id="cloudKey" type="password" placeholder="$2b$10$...">
           </div>
           <div>
             <label>Bin ID</label>
-            <input id="cloudBin" type="text" placeholder="e.g. 670a5...">
+            <input id="cloudBin" type="text" placeholder="670a5...">
           </div>
         </div>
         <div class="cust-actions" style="margin-top:8px">
@@ -217,9 +216,9 @@
         </div>
 
         <div class="cust-actions" style="margin-top:4px">
-          <button type="button" class="secondary sm" onclick="exportCustomers()">Export (Manual)</button>
+          <button type="button" class="secondary sm" onclick="exportCustomers()">Export (Backup)</button>
           <label class="btn-file-label secondary sm">
-            Import (Manual)
+            Import (Backup)
             <input type="file" id="importCustomerFile" accept=".json" onchange="importCustomers(event)" style="display:none">
           </label>
         </div>
@@ -388,7 +387,7 @@ async function pushToCloud(manual = false) {
   const key = $("cloudKey").value.trim();
   const bin = $("cloudBin").value.trim();
   if(!key || !bin) {
-    if(manual) alert("Please enter both API Key and Bin ID first.");
+    if(manual) alert("Please enter both Master API Key and Bin ID first.");
     return;
   }
   
@@ -403,11 +402,14 @@ async function pushToCloud(manual = false) {
       },
       body: JSON.stringify(data)
     });
-    if(!res.ok) throw new Error("Sync failed");
+    if(!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Server returned ${res.status}: ${errText}`);
+    }
     if(manual) alert("Success! Customers successfully pushed to the cloud.");
   } catch(err) {
-    console.error(err);
-    if(manual) alert("Push failed. Please check your API Key and Bin ID.");
+    console.error("Cloud Push Error:", err);
+    if(manual) alert("Push failed: " + err.message);
   }
 }
 
@@ -415,7 +417,7 @@ async function pullFromCloud(manual = false) {
   const key = $("cloudKey").value.trim();
   const bin = $("cloudBin").value.trim();
   if(!key || !bin) {
-    if(manual) alert("Please enter both API Key and Bin ID first.");
+    if(manual) alert("Please enter both Master API Key and Bin ID first.");
     return;
   }
 
@@ -425,26 +427,29 @@ async function pullFromCloud(manual = false) {
         "X-Master-Key": key
       }
     });
-    if(!res.ok) throw new Error("Sync failed");
+    if(!res.ok) {
+      const errText = await res.text();
+      throw new Error(`Server returned ${res.status}: ${errText}`);
+    }
     const json = await res.json();
     
-    if(json.record && typeof json.record === 'object') {
+    // JSONBin v3 wraps data inside a "record" object
+    const cloudData = json.record || json;
+    
+    if(cloudData && typeof cloudData === 'object') {
       const local = getCustomers();
-      const cloud = json.record;
-      const merged = { ...local, ...cloud }; 
+      const merged = { ...local, ...cloudData }; 
       
-      // Save locally without triggering another push
       localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(merged));
       populateCustomerDropdown();
       
       if(manual) alert("Success! Customers successfully pulled from cloud.");
     }
   } catch(err) {
-    console.error(err);
-    if(manual) alert("Pull failed. Please check your API Key and Bin ID.");
+    console.error("Cloud Pull Error:", err);
+    if(manual) alert("Pull failed: " + err.message);
   }
 }
-
 
 /* ---------- Save Perfect PDF Action ---------- */
 
@@ -509,9 +514,7 @@ async function mailInvoice() {
   const subjectString = getFormattedSubject();
   const originalBodyString = getFormattedBody();
   
-  // Place the Email first, Subject second, then the body.
   const combinedBodyString = `${customerEmail}\n${subjectString}\n\n--------------------------------\n\n${originalBodyString}`;
-  
   const filename = `${subjectString}.pdf`;
 
   mailBtn.textContent = "Preparing PDF...";
@@ -581,7 +584,7 @@ async function mailInvoice() {
   }
 }
 
-/* ---------- Customer Management & Import/Export ---------- */
+/* ---------- Customer Management ---------- */
 
 function normalizeCustomerName(name){
   return String(name || "").trim().toLowerCase().replace(/\s+/g," ");
@@ -595,7 +598,7 @@ function getCustomers(){
 function saveCustomers(customers){
   localStorage.setItem(CUSTOMERS_KEY, JSON.stringify(customers));
   populateCustomerDropdown();
-  pushToCloud(); // Automatically push to cloud whenever local is saved
+  pushToCloud(false); // Silent push
 }
 
 function rememberCurrentCustomer(){
@@ -681,7 +684,7 @@ function importCustomers(event){
     }
   };
   reader.readAsText(file);
-  event.target.value = ''; // reset file input
+  event.target.value = '';
 }
 
 function populateCustomerDropdown(){
@@ -889,7 +892,6 @@ document.querySelectorAll("input,textarea").forEach(x=>{
   x.addEventListener("input", render);
 });
 
-// Save Cloud Keys locally when typed
 $("cloudKey").addEventListener("change", e => localStorage.setItem(CLOUD_KEY, e.target.value.trim()));
 $("cloudBin").addEventListener("change", e => localStorage.setItem(CLOUD_BIN, e.target.value.trim()));
 
@@ -899,7 +901,6 @@ $("invoiceDate").value = getTodayString();
 
 setInitialInvoiceCounter();
 
-// Load Cloud Keys from local storage
 $("cloudKey").value = localStorage.getItem(CLOUD_KEY) || "";
 $("cloudBin").value = localStorage.getItem(CLOUD_BIN) || "";
 
@@ -911,8 +912,10 @@ populateCustomerDropdown();
 renderEditor();
 render();
 
-// Automatically pull from cloud on load if keys exist
-pullFromCloud(false);
+// Only attempt initial cloud pull if keys are already filled out
+if($("cloudKey").value && $("cloudBin").value) {
+  pullFromCloud(false);
+}
 </script>
 </body>
 </html>
